@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Connect KADO</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         color: #1F1A15; background: #FBF8F2; display: flex; justify-content: center; padding: 28px 16px 64px; }
+  .wrap { width: 100%; max-width: 430px; }
+  .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; font-weight: 800; font-size: 20px; }
+  .dot { width: 28px; height: 28px; border-radius: 999px; background: #2E5C44; }
+  .card { background: #fff; border: 1px solid #ECE4D8; border-radius: 18px; padding: 20px; }
+  h1 { font-size: 21px; margin: 0 0 6px; letter-spacing: -0.3px; }
+  p { margin: 0 0 14px; }
+  .muted { color: #6E6660; font-size: 14px; }
+  label { display: block; font-size: 13px; font-weight: 700; margin: 14px 0 6px; }
+  input[type=email], input[type=text] { width: 100%; padding: 13px 14px; border-radius: 12px;
+    border: 1.5px solid #E2D9CB; font-size: 16px; background: #fff; color: inherit; }
+  button { width: 100%; margin-top: 18px; padding: 14px; border: 0; border-radius: 12px;
+    background: #2E5C44; color: #fff; font-size: 16px; font-weight: 700; cursor: pointer; }
+  button[disabled] { opacity: .55; cursor: default; }
+  button.secondary { background: transparent; color: #6E6660; margin-top: 8px; font-weight: 600; }
+  .scope { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border: 1.5px solid #ECE4D8;
+    border-radius: 12px; margin-bottom: 8px; }
+  .scope input { margin-top: 4px; width: 18px; height: 18px; }
+  .scope b { display: block; font-size: 14px; }
+  .scope span { font-size: 13px; color: #6E6660; }
+  .err { background: #FDECEC; color: #B3261E; padding: 10px 12px; border-radius: 10px; font-size: 14px; margin-bottom: 12px; }
+  .client { font-size: 13px; color: #6E6660; margin-bottom: 14px; }
+  code { background: rgba(127,127,127,.14); padding: 2px 6px; border-radius: 6px; font-size: 13px; }
+  .hide { display: none; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #14120F; color: #F2EDE5; }
+    .card { background: #1E1B17; border-color: #2E2A24; }
+    .muted, .scope span, .client, button.secondary { color: #A79F96; }
+    input[type=email], input[type=text] { background: #14120F; border-color: #2E2A24; }
+    .scope { border-color: #2E2A24; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand"><span class="dot"></span> KADO</div>
+  <div class="card" id="card">
+    <h1 id="title">Connect KADO</h1>
+    <p class="muted" id="lede">Loading…</p>
+    <div class="err hide" id="err"></div>
+
+    <!-- step 1: email -->
+    <form id="emailStep" class="hide" autocomplete="on">
+      <label for="email">Your KADO email</label>
+      <input id="email" type="email" autocomplete="email" required placeholder="you@example.com" inputmode="email">
+      <button type="submit" id="emailBtn">Email me a code</button>
+    </form>
+
+    <!-- step 2: code -->
+    <form id="codeStep" class="hide">
+      <label for="code">Sign-in code</label>
+      <input id="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" required placeholder="123456">
+      <button type="submit" id="codeBtn">Continue</button>
+      <button type="button" class="secondary" id="resend">Send a new code</button>
+    </form>
+
+    <!-- step 3: consent -->
+    <form id="consentStep" class="hide">
+      <p class="client" id="clientLine"></p>
+      <div id="scopes"></div>
+      <button type="submit" id="allowBtn">Allow</button>
+      <button type="button" class="secondary" id="denyBtn">Cancel</button>
+    </form>
+  </div>
+  <p class="muted" style="margin-top:14px">You can disconnect any time in the KADO app: Profile → Claude.</p>
+</div>
+
+<script>
+// The OAuth logic lives in KADO's edge function; this page is only its face.
+// Supabase serves any text/html from *.supabase.co as text/plain (their
+// anti-phishing rule), so the sign-in UI is hosted here and talks to the
+// function over JSON. The flow id in the URL is server-side state — it is
+// useless without the emailed code.
+(function () {
+  var q = new URLSearchParams(location.search);
+  var flow = q.get('flow') || '';
+  var csrf = q.get('csrf') || '';
+  var api = q.get('api') || '';
+  var el = function (id) { return document.getElementById(id); };
+  var show = function (id, on) { el(id).classList[on ? 'remove' : 'add']('hide'); };
+  var email = '';
+
+  function fail(msg) {
+    el('err').textContent = msg;
+    show('err', true);
+  }
+  function clearErr() { show('err', false); }
+
+  function post(step, body, btn) {
+    if (btn) { btn.disabled = true; }
+    return fetch(api + '/authorize/' + step, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(Object.assign({ flow: flow, csrf: csrf }, body))
+    }).then(function (r) { return r.json().catch(function () { return { error: 'Unexpected reply from KADO.' }; }); })
+      .then(function (j) {
+        if (btn) { btn.disabled = false; }
+        if (j && j.error) { throw new Error(j.error); }
+        return j;
+      }, function () {
+        if (btn) { btn.disabled = false; }
+        throw new Error('Could not reach KADO. Check your connection and try again.');
+      });
+  }
+
+  if (!flow || !csrf || !api) {
+    el('lede').textContent = '';
+    fail(q.get('error') === 'unknown_client'
+      ? "This app isn't registered with KADO. Start the connection again from the app that sent you here."
+      : q.get('error') === 'bad_redirect'
+        ? "That app's redirect address isn't registered with KADO, so we won't send you back to it."
+        : 'This link is incomplete. Start the connection again from the app that sent you here.');
+    return;
+  }
+
+  el('lede').textContent = (q.get('client') || 'An app') + ' wants to connect to your KADO account.';
+  show('emailStep', true);
+
+  el('emailStep').addEventListener('submit', function (e) {
+    e.preventDefault();
+    clearErr();
+    email = el('email').value.trim().toLowerCase();
+    post('send-code', { email: email }, el('emailBtn')).then(function () {
+      el('title').textContent = 'Check your email';
+      el('lede').textContent = 'We sent a sign-in code to ' + email + '.';
+      show('emailStep', false);
+      show('codeStep', true);
+      el('code').focus();
+    }).catch(function (e) { fail(e.message); });
+  });
+
+  el('resend').addEventListener('click', function () {
+    clearErr();
+    post('send-code', { email: email }, el('resend')).then(function () {
+      el('lede').textContent = 'We sent another code to ' + email + '.';
+    }).catch(function (e) { fail(e.message); });
+  });
+
+  el('codeStep').addEventListener('submit', function (e) {
+    e.preventDefault();
+    clearErr();
+    post('verify', { code: el('code').value.trim() }, el('codeBtn')).then(function (j) {
+      el('title').textContent = 'Allow access to KADO?';
+      el('lede').textContent = j.profile_name ? 'Signed in as ' + j.profile_name + '.' : 'Signed in.';
+      el('clientLine').innerHTML = escapeHtml(j.client_name || 'An app') +
+        ' &middot; redirects to <code>' + escapeHtml(j.redirect_host || '') + '</code>';
+      el('scopes').innerHTML = (j.scopes || ['read']).map(scopeBox).join('');
+      show('codeStep', false);
+      show('consentStep', true);
+    }).catch(function (e) { fail(e.message); });
+  });
+
+  var COPY = {
+    read: ['See your plan', "Today's meals, targets, progress, history and your food preferences."],
+    log: ['Log for you', 'Mark meals eaten, log water and weigh-ins.'],
+    plan: ['Change plan settings', 'Calorie and macro targets, meals per day, delivery area, food preferences.']
+  };
+  function scopeBox(s) {
+    var c = COPY[s];
+    if (!c) { return ''; }
+    var locked = s === 'read' ? ' disabled' : '';
+    return '<label class="scope"><input type="checkbox" value="' + s + '" checked' + locked + '>' +
+      '<span><b>' + c[0] + '</b><span>' + c[1] + '</span></span></label>';
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  el('consentStep').addEventListener('submit', function (e) {
+    e.preventDefault();
+    clearErr();
+    var granted = ['read'];
+    Array.prototype.forEach.call(el('scopes').querySelectorAll('input'), function (i) {
+      if (i.checked && i.value !== 'read') { granted.push(i.value); }
+    });
+    post('approve', { scopes: granted }, el('allowBtn')).then(function (j) {
+      location.replace(j.redirect_url);
+    }).catch(function (e) { fail(e.message); });
+  });
+
+  el('denyBtn').addEventListener('click', function () {
+    clearErr();
+    post('deny', {}, el('denyBtn')).then(function (j) {
+      location.replace(j.redirect_url);
+    }).catch(function (e) { fail(e.message); });
+  });
+})();
+</script>
+</body>
+</html>

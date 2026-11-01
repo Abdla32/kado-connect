@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src https://sjsuntohpvseyecbhina.supabase.co https://lguzamussvuaduvyyvlj.supabase.co; form-action 'none'; base-uri 'none'">
 <title>Connect KADO</title>
 <style>
   :root { color-scheme: light dark; }
@@ -86,7 +87,15 @@
   var q = new URLSearchParams(location.search);
   var flow = q.get('flow') || '';
   var csrf = q.get('csrf') || '';
-  var api = q.get('api') || '';
+  // Only KADO's own MCP function may receive the email and code. The api
+  // parameter used to be trusted as-is, so a link naming another server would
+  // have sent your email and sign-in code there.
+  var API_ALLOWED = [
+    'https://sjsuntohpvseyecbhina.supabase.co/functions/v1/mcp',
+    'https://lguzamussvuaduvyyvlj.supabase.co/functions/v1/mcp'
+  ];
+  var api = (q.get('api') || '').replace(/\/+$/, '');
+  if (API_ALLOWED.indexOf(api) < 0) { api = ''; }
   var el = function (id) { return document.getElementById(id); };
   var show = function (id, on) { el(id).classList[on ? 'remove' : 'add']('hide'); };
   var email = '';
@@ -96,6 +105,17 @@
     show('err', true);
   }
   function clearErr() { show('err', false); }
+
+  // The server only hands back registered redirect URIs (https, or http on
+  // localhost/127.0.0.1); refuse anything else rather than navigate to it.
+  function go(url) {
+    var u;
+    try { u = new URL(url); } catch (_) { u = null; }
+    var ok = u && !u.hash && (u.protocol === 'https:' ||
+      (u.protocol === 'http:' && (u.hostname === 'localhost' || u.hostname === '127.0.0.1')));
+    if (!ok) { fail('KADO returned an address it should not have, so we stopped here. Start the connection again from your app.'); return; }
+    location.replace(u.href);
+  }
 
   function post(step, body, btn) {
     if (btn) { btn.disabled = true; }
@@ -187,14 +207,14 @@
       if (i.checked && i.value !== 'read') { granted.push(i.value); }
     });
     post('approve', { scopes: granted }, el('allowBtn')).then(function (j) {
-      location.replace(j.redirect_url);
+      go(j.redirect_url);
     }).catch(function (e) { fail(e.message); });
   });
 
   el('denyBtn').addEventListener('click', function () {
     clearErr();
     post('deny', {}, el('denyBtn')).then(function (j) {
-      location.replace(j.redirect_url);
+      go(j.redirect_url);
     }).catch(function (e) { fail(e.message); });
   });
 })();
